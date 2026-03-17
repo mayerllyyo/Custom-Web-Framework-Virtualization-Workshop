@@ -7,13 +7,18 @@ import java.util.Map;
 /**
  * Web framework entry point providing static methods to register REST routes
  * and configure static file serving.
- *
+ * 
+ * Supports:
+ * - Concurrent request handling via thread pools
+ * - Graceful server shutdown via Runtime hooks
+ * - Static file serving from classpath
  */
 public class WebFramework {
 
     private static final Map<String, Route> routes = new HashMap<>();
     private static String staticFilesLocation = "webroot";
     private static int port = 8080;
+    private static WebServer currentServer = null;
 
     private WebFramework() {
         // utility class
@@ -42,6 +47,7 @@ public class WebFramework {
 
     /**
      * Sets the port on which the server listens. Defaults to 8080.
+     * Can be overridden via PORT environment variable.
      *
      * @param serverPort the port number
      */
@@ -50,13 +56,35 @@ public class WebFramework {
     }
 
     /**
-     * Starts the web server.
+     * Starts the web server with support for concurrent requests
+     * and graceful shutdown via JVM shutdown hooks.
      *
      * @throws IOException if the server cannot be started
      */
     public static void start() throws IOException {
-        WebServer server = new WebServer(routes, staticFilesLocation, port);
-        server.start();
+        // Allow port to be overridden by environment variable
+        String envPort = System.getenv("PORT");
+        if (envPort != null && !envPort.isEmpty()) {
+            try {
+                port = Integer.parseInt(envPort);
+            } catch (NumberFormatException e) {
+                // Use default port if parsing fails
+            }
+        }
+        
+        currentServer = new WebServer(routes, staticFilesLocation, port);
+        currentServer.start();
+    }
+
+    /**
+     * Stops the currently running server gracefully.
+     * Useful for testing or programmatic control.
+     */
+    public static void stop() {
+        if (currentServer != null) {
+            currentServer.stop();
+            currentServer = null;
+        }
     }
 
     /**
@@ -66,6 +94,10 @@ public class WebFramework {
         routes.clear();
         staticFilesLocation = "webroot";
         port = 8080;
+        if (currentServer != null) {
+            currentServer.stop();
+            currentServer = null;
+        }
     }
 
     /**
@@ -84,5 +116,14 @@ public class WebFramework {
      */
     static String getStaticFilesLocation() {
         return staticFilesLocation;
+    }
+
+    /**
+     * Returns the current port (for testing).
+     *
+     * @return the port number
+     */
+    static int getPort() {
+        return port;
     }
 }

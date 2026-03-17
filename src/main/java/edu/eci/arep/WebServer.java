@@ -10,18 +10,25 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
  * Core HTTP server that dispatches requests to registered routes or serves static files.
+ * Supports concurrent request handling via a thread pool and graceful shutdown.
  */
 public class WebServer {
 
-    private static final int THREAD_POOL_SIZE = 10;
+    private static final int THREAD_POOL_SIZE = 50;
+    private static final long SHUTDOWN_TIMEOUT_SECONDS = 10;
+    private static final Logger LOGGER = Logger.getLogger(WebServer.class.getName());
 
     private final int port;
     private final Map<String, Route> routes;
     private final String staticFilesLocation;
+    private ExecutorService executor;
+    private ServerSocket serverSocket;
+    private volatile boolean running = false;
 
     /**
      * Constructs a WebServer with the given routes and static files location.
@@ -34,23 +41,108 @@ public class WebServer {
         this.routes = new HashMap<>(routes);
         this.staticFilesLocation = staticFilesLocation;
         this.port = port;
+        this.executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
     }
 
     /**
-     * Starts the server, accepting connections indefinitely.
+     * Starts the server, accepting connections until stopped.
+     * Registers a runtime shutdown hook for graceful termination.
      *
      * @throws IOException if the server socket cannot be created
      */
     public void start() throws IOException {
-        ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-        Runtime.getRuntime().addShutdownHook(new Thread(executor::shutdown));
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            Logger.getLogger(WebServer.class.getName()).info("Server running on http://localhost:" + port);
-            while (true) {
-                Socket clientSocket = serverSocket.accept();
-                executor.submit(() -> handleConnection(clientSocket));
+        running = true;
+        registerShutdownHook();
+        
+        try (ServerSocket socket = new ServerSocket(port)) {
+            this.serverSocket = socket;
+            LOGGER.info("🚀 MicroSpringBoot Server started on http://localhost:" + port);
+            LOGGER.info("📊 Thread pool size: " + THREAD_POOL_SIZE);
+            LOGGER.info("✅ Support for concurrent requests enabled");
+            
+            while (running) {
+                try {
+                    Socket clientSocket = serverSocket.accept();
+                    if (running) {
+                        executor.submit(() -> handleConnection(clientSocket));
+                    }
+                } catch (java.net.SocketException e) {
+                    if (running) {
+                        LOGGER.warning("Socket error during accept: " + e.getMessage());
+                    }
+                }
             }
+        } catch (IOException e) {
+            LOGGER.severe("Server failed to start: " + e.getMessage());
+            throw e;
+        } finally {
+            gracefulShutdown();
         }
+    }
+
+    /**
+     * Registers a JVM shutdown hook for graceful server termination.
+     * The hook runs on a separate thread and ensures proper cleanup.
+     */
+    private void registerShutdownHook() {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            LOGGER.info("🛑 Shutdown signal received...");
+            running = false;
+            gracefulShutdown();
+        }, "ServerShutdownHook"));
+    }
+
+    /**
+     * Performs graceful shutdown:
+     * 1. Stops accepting new connections
+     * 2. Closes the server socket
+     * 3. Stops accepting new tasks in the executor
+     * 4. Waits for existing tasks to complete
+     * 5. Forces shutdown if timeout exceeded
+     */
+    private synchronized void gracefulShutdown() {
+        if (executor == null || executor.isShutdown()) {
+            return;
+        }
+
+        LOGGER.info("⏳ Waiting for existing connections to finish...");
+        running = false;
+
+        try {
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                serverSocket.close();
+                LOGGER.info("✅ Server socket closed");
+            }
+        } catch (IOException e) {
+            LOGGER.warning("Error closing server socket: " + e.getMessage());
+        }
+
+        executor.shutdown();
+        try {
+            // Wait for active tasks to complete
+            if (!executor.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                LOGGER.warning("⚠️ Threads did not terminate gracefully, forcing shutdown");
+                executor.shutdownNow();
+                // Wait a bit more for interrupted threads
+                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    LOGGER.severe("❌ Some threads did not terminate");
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
+        }
+
+        LOGGER.info("✅ Server shutdown complete");
+    }
+
+    /**
+     * Public method to stop the server gracefully.
+     * Can be called from another thread or shutdown hook.
+     */
+    public void stop() {
+        running = false;
+        gracefulShutdown();
     }
 
     private void handleConnection(Socket clientSocket) {
