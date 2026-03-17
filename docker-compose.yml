@@ -7,9 +7,9 @@ services:
       dockerfile: Dockerfile
     container_name: webframework
     ports:
-      - "8080:6000"
+      - "8080:8080"
     environment:
-      - PORT=6000
+      - PORT=8080
     restart: unless-stopped
 
   web2:
@@ -18,9 +18,9 @@ services:
       dockerfile: Dockerfile
     container_name: webframework2
     ports:
-      - "8081:6000"
+      - "8081:8080"
     environment:
-      - PORT=6000
+      - PORT=8080
     restart: unless-stopped
 
   web3:
@@ -29,7 +29,7 @@ services:
       dockerfile: Dockerfile
     container_name: webframework3
     ports:
-      - "8082:6000"
+      - "8082:8080"
     environment:
-      - PORT=6000
+      - PORT=8080
     restart: unless-stopped
